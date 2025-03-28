@@ -1,46 +1,69 @@
-# Save this file as BurpToVSCode.py (for example)
-# Ensure Jython is installed and Burp is configured to load .py files via Jython
-
-from burp import IBurpExtender, IContextMenuFactory, IContextMenuInvocation
+from burp import IBurpExtender, IContextMenuFactory
 from javax.swing import JMenuItem
-import httplib, urllib
+import httplib
+import json
 
 class BurpExtender(IBurpExtender, IContextMenuFactory):
-
     def registerExtenderCallbacks(self, callbacks):
         self._callbacks = callbacks
         self._helpers = callbacks.getHelpers()
-        callbacks.setExtensionName("Simple Request Sender")
-        # Register to add a custom right-click option
+        callbacks.setExtensionName("Burp To VsCode")
         callbacks.registerContextMenuFactory(self)
-
+    
     def createMenuItems(self, invocation):
-        # Create a menu item to send selected requests to your local server
+        # Create menu item to send both request and response
         sendItem = JMenuItem(
-            "Send request to VSCode",
-            actionPerformed=lambda x: self.sendSelectedRequests(invocation)
+            "Send REQ/RES to VSCode",
+            actionPerformed=lambda x: self.sendSelectedRequestsAndResponses(invocation)
         )
         return [sendItem]
-
-    def sendSelectedRequests(self, invocation):
+    
+    def sendSelectedRequestsAndResponses(self, invocation):
         selected_msgs = invocation.getSelectedMessages()
         if not selected_msgs:
             return
-
+        
         for msg in selected_msgs:
+            # Get request details
             request_bytes = msg.getRequest()
             if request_bytes is None:
                 continue
+            
             request_str = self._helpers.bytesToString(request_bytes)
-
-            # Send to your local endpoint (POST)
+            
+            # Get response details (if available)
+            response_bytes = msg.getResponse()
+            response_str = self._helpers.bytesToString(response_bytes) if response_bytes else None
+            
+            # Parse request details
+            request_info = self._helpers.analyzeRequest(msg)
+            url = request_info.getUrl()
+            method = request_info.getMethod()
+            
+            # Prepare payload
+            payload = {
+                'request': {
+                    'raw': request_str,
+                    'method': method,
+                    'url': str(url)
+                },
+                'response': response_str
+            }
+            
+            # Send to local endpoint
             try:
                 conn = httplib.HTTPConnection("localhost", 3700)
-                body = urllib.urlencode({"request": request_str})
-                headers = {"Content-type": "application/x-www-form-urlencoded"}
-                conn.request("POST", "/burp-data", body, headers)
-                response = conn.getresponse()
+                headers = {"Content-type": "application/json"}
+                
+                # Convert payload to JSON
+                json_payload = json.dumps(payload)
+                
+                conn.request("POST", "/burp-data", json_payload, headers)                
+                
                 conn.close()
             except Exception as e:
-                # For quick debugging in Burp's Extender output
                 print("Error sending request:", e)
+
+# Export the extender
+def createBurpExtender(callbacks):
+    return BurpExtender()
