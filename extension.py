@@ -58,6 +58,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, ITab):
                 "response": res
             })
 
+            print("[BurpExtender] Sending data to VSCode on port {}".format(self.port))
             try:
                 conn = httplib.HTTPConnection("localhost", int(self.port))
                 conn.request("POST", "/burp-data", payload,
