@@ -1,69 +1,71 @@
-from burp import IBurpExtender, IContextMenuFactory
-from javax.swing import JMenuItem
+from burp import IBurpExtender, IContextMenuFactory, ITab
+from javax.swing import JPanel, JLabel, JTextField, JButton, JMenuItem, BoxLayout, Box
+from java.awt import FlowLayout
 import httplib
 import json
 
-class BurpExtender(IBurpExtender, IContextMenuFactory):
+class BurpExtender(IBurpExtender, IContextMenuFactory, ITab):
+    # ---- bootstrap ---------------------------------------------------------
     def registerExtenderCallbacks(self, callbacks):
         self._callbacks = callbacks
-        self._helpers = callbacks.getHelpers()
-        callbacks.setExtensionName("Burp To VsCode")
+        self._helpers   = callbacks.getHelpers()
+        callbacks.setExtensionName("Burp to VSCode")
+
+        self.port = callbacks.loadExtensionSetting("destPort") or "3700"
         callbacks.registerContextMenuFactory(self)
-    
+        callbacks.addSuiteTab(self)
+
+    # ---- ITab --------------------------------------------------------------
+    def getTabCaption(self):
+        return "VSCode Sender"
+
+    def getUiComponent(self):
+        panel = JPanel()
+        panel.setLayout(BoxLayout(panel, BoxLayout.Y_AXIS))
+
+        row = JPanel()
+        row = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0))  # small 5-px gap
+        row.add(JLabel("Port:"))
+        self.portField = JTextField(6)
+        self.portField.setText(self.port)
+        row.add(self.portField)
+        row.add(JButton("Save", actionPerformed=self._savePort))
+
+        panel.add(row)
+        return panel
+
+    def _savePort(self, _):
+        self.port = self.portField.getText().strip()
+        self._callbacks.saveExtensionSetting("destPort", self.port)
+
+    # ---- context-menu ------------------------------------------------------
     def createMenuItems(self, invocation):
-        # Create menu item to send both request and response
-        sendItem = JMenuItem(
-            "Send REQ/RES to VSCode",
-            actionPerformed=lambda x: self.sendSelectedRequestsAndResponses(invocation)
-        )
-        return [sendItem]
-    
-    def sendSelectedRequestsAndResponses(self, invocation):
-        selected_msgs = invocation.getSelectedMessages()
-        if not selected_msgs:
-            return
-        
-        for msg in selected_msgs:
-            # Get request details
-            request_bytes = msg.getRequest()
-            if request_bytes is None:
+        return [JMenuItem("Send REQ/RES to VSCode",
+                          actionPerformed=lambda _: self._send(invocation))]
+
+    def _send(self, invocation):
+        for msg in (invocation.getSelectedMessages() or []):
+            req = self._helpers.bytesToString(msg.getRequest())
+            if not req:
                 continue
-            
-            request_str = self._helpers.bytesToString(request_bytes)
-            
-            # Get response details (if available)
-            response_bytes = msg.getResponse()
-            response_str = self._helpers.bytesToString(response_bytes) if response_bytes else None
-            
-            # Parse request details
-            request_info = self._helpers.analyzeRequest(msg)
-            url = request_info.getUrl()
-            method = request_info.getMethod()
-            
-            # Prepare payload
-            payload = {
-                'request': {
-                    'raw': request_str,
-                    'method': method,
-                    'url': str(url)
-                },
-                'response': response_str
-            }
-            
-            # Send to local endpoint
+            res = self._helpers.bytesToString(msg.getResponse()) if msg.getResponse() else None
+            info = self._helpers.analyzeRequest(msg)
+
+            payload = json.dumps({
+                "request": {"raw": req,
+                            "method": info.getMethod(),
+                            "url": str(info.getUrl())},
+                "response": res
+            })
+
             try:
-                conn = httplib.HTTPConnection("localhost", 3700)
-                headers = {"Content-type": "application/json"}
-                
-                # Convert payload to JSON
-                json_payload = json.dumps(payload)
-                
-                conn.request("POST", "/burp-data", json_payload, headers)                
-                
+                conn = httplib.HTTPConnection("localhost", int(self.port))
+                conn.request("POST", "/burp-data", payload,
+                             {"Content-Type": "application/json"})
                 conn.close()
             except Exception as e:
-                print("Error sending request:", e)
+                print("Error sending:", e)
 
-# Export the extender
+# Burp entry-point
 def createBurpExtender(callbacks):
     return BurpExtender()
